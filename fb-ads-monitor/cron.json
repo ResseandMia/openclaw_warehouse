@@ -1,0 +1,14 @@
+{
+  "name": "PetzyMart Daily Ad Report",
+  "schedule": {
+    "kind": "cron",
+    "expr": "0 9 * * *",
+    "tz": "Asia/Shanghai"
+  },
+  "payload": {
+    "kind": "systemEvent",
+    "text": "获取今天的 PetzyMart 广告数据并保存到 Notion"
+  },
+  "sessionTarget": "main",
+  "enabled": true
+}
