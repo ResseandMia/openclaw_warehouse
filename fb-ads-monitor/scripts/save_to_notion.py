@@ -10,7 +10,7 @@ from datetime import datetime
 
 # Configuration
 NOTION_TOKEN = "YOUR_NOTION_TOKEN"
-DATABASE_ID = "YOUR_NOTION_DATABASE_ID"
+DATABASE_ID = "YOUR_DATABASE_ID"
 
 def save_to_notion(data, date_str=None):
     """Save campaign data to Notion database"""

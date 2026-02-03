@@ -11,10 +11,10 @@ Monitor PetzyMart ad account and save daily metrics to Notion.
 
 **Facebook API:**
 - Token: `YOUR_FB_TOKEN`
-- Account ID: `act_YOUR_ACCOUNT_ID`
+- Account ID: `act_878834933674540` (PetzyMart)
 
 **Notion:**
-- Database: `YOUR_NOTION_DATABASE_URL`
+- Database: https://www.notion.so/2fc83d24986d803e8bdacac6d4a82476?v=...
 - Integration Token: `YOUR_NOTION_TOKEN`
 
 ## Metrics Tracked

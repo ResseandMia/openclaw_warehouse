@@ -11,10 +11,10 @@ from datetime import datetime, timedelta
 
 # Configuration
 FB_TOKEN = "YOUR_FB_TOKEN"
-ACCOUNT_ID = "act_YOUR_ACCOUNT_ID"
+ACCOUNT_ID = "act_YOUR_ACCOUNT_ID"  # PetzyMart
 
 NOTION_TOKEN = "YOUR_NOTION_TOKEN"
-NOTION_DATABASE_ID = "YOUR_NOTION_DATABASE_ID"
+NOTION_DATABASE_ID = "YOUR_DATABASE_ID"
 
 # ============ Facebook Functions ============
 
