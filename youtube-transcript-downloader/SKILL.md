@@ -1,185 +1,286 @@
 ---
 name: youtube-transcript-downloader
 description: |
-  Download YouTube transcripts via TranscriptAPI.com. Supports transcript extraction, YouTube search, and multiple output formats (JSON, text, SRT, VTT, Markdown). Use when asked to download, extract, or save YouTube video transcripts.
+  Download YouTube video transcripts via TranscriptAPI.com REST API. Use when the user wants to:
+  - Download or extract a YouTube video transcript/subtitles
+  - Search YouTube for videos, channels, or playlists
+  - Save subtitles as SRT, VTT, Markdown, or plain text
+  - Batch download transcripts from multiple URLs
+  - Get structured transcript data with timestamps
+  Trigger phrases: "download transcript", "get subtitles", "YouTube transcript", "extract captions", "save transcript"
 ---
 
 # YouTube Transcript Downloader
 
-Download YouTube video transcripts using the [TranscriptAPI.com](https://transcriptapi.com) REST API.
+Download YouTube video transcripts using the [TranscriptAPI.com](https://transcriptapi.com) REST API. Supports single video transcripts, YouTube search, batch downloads, and 5 output formats.
 
-## Features
+## When to Use This Skill
 
-- Transcript extraction with timestamps and metadata
-- YouTube video search with type and result limit filtering
-- Multiple output formats: JSON, text, SRT, VTT, Markdown
-- Save transcripts to files or print to stdout
-- Batch download from a list of URLs
-- Paragraph grouping for readable text output
+Use this skill when the user wants to:
+
+- Extract or download a transcript from a YouTube video
+- Save subtitles/captions to a file (SRT, VTT, Markdown, text, JSON)
+- Search YouTube for videos on a topic
+- Batch download transcripts from a list of URLs
+- Get structured transcript data for LLM processing or RAG pipelines
 
 ## Setup
 
-### API Key
+### 1. Get API Key
 
-Get a free API key (100 credits) at [transcriptapi.com/signup](https://transcriptapi.com/signup).
+Sign up for a free API key (100 credits) at [transcriptapi.com/signup](https://transcriptapi.com/signup).
 
-Set it as an environment variable:
+### 2. Set Environment Variable
 
 ```bash
 export TRANSCRIPTAPI_KEY="sk_your_api_key_here"
 ```
 
-Or pass it via `--api-key` on every command.
+Or pass `--api-key sk_xxx` on every command.
 
-### Dependencies
+### 3. Install Dependencies
 
 ```bash
 pip install requests
 ```
 
+## Quick Start
+
+```bash
+# Get transcript as JSON
+python3 scripts/transcript_downloader.py transcript --url "https://youtube.com/watch?v=VIDEO_ID"
+
+# Download as Markdown file
+python3 scripts/transcript_downloader.py download --url "VIDEO_ID" --format markdown --output transcript.md
+
+# Search YouTube
+python3 scripts/transcript_downloader.py search --query "machine learning" --limit 5
+```
+
 ## Commands
 
-### Get Transcript
+### transcript - Fetch and print transcript
 
-Fetch transcript for a single video:
+Fetch a video's transcript and print structured JSON to stdout.
 
 ```bash
+# Basic usage
 python3 scripts/transcript_downloader.py transcript --url "https://youtube.com/watch?v=VIDEO_ID"
-```
 
-With timestamps and metadata:
-
-```bash
+# With video metadata (title, duration, etc.)
 python3 scripts/transcript_downloader.py transcript \
   --url "https://youtube.com/watch?v=VIDEO_ID" \
-  --timestamps \
   --metadata
-```
 
-Plain text output:
-
-```bash
+# Without timestamps
 python3 scripts/transcript_downloader.py transcript \
   --url "dQw4w9WgXcQ" \
-  --format text
+  --no-timestamps
 ```
 
-### Download Transcript to File
+**Output:** JSON to stdout with `video_id`, `language`, `transcript` segments.
 
-Save as SRT:
+| Argument | Short | Default | Description |
+|----------|-------|---------|-------------|
+| `--url` | `-u` | required | YouTube URL or video ID |
+| `--timestamps` | `-t` | true | Include timestamps |
+| `--no-timestamps` | | | Exclude timestamps |
+| `--metadata` | `-m` | false | Include video metadata |
+
+### download - Save transcript to file
+
+Fetch transcript and convert to a specific format. Writes to file or stdout.
 
 ```bash
+# Save as SRT subtitles
 python3 scripts/transcript_downloader.py download \
   --url "https://youtube.com/watch?v=VIDEO_ID" \
   --format srt \
   --output subtitles.srt
-```
 
-Save as Markdown:
-
-```bash
+# Save as Markdown (default format)
 python3 scripts/transcript_downloader.py download \
-  --url "https://youtube.com/watch?v=VIDEO_ID" \
-  --format markdown \
+  --url "VIDEO_ID" \
   --output transcript.md
-```
 
-Save as VTT:
-
-```bash
+# Save as WebVTT
 python3 scripts/transcript_downloader.py download \
-  --url "https://youtube.com/watch?v=VIDEO_ID" \
+  --url "VIDEO_ID" \
   --format vtt \
   --output subtitles.vtt
+
+# Print plain text to stdout
+python3 scripts/transcript_downloader.py download \
+  --url "VIDEO_ID" \
+  --format text
+
+# Save as JSON segments
+python3 scripts/transcript_downloader.py download \
+  --url "VIDEO_ID" \
+  --format json \
+  --output data.json
 ```
 
-### Search YouTube
+| Argument | Short | Default | Description |
+|----------|-------|---------|-------------|
+| `--url` | `-u` | required | YouTube URL or video ID |
+| `--format` | `-f` | markdown | json, text, srt, vtt, markdown |
+| `--output` | `-o` | stdout | Output file path |
+| `--timestamps` | `-t` | true | Include timestamps (text format) |
 
-Search for videos:
+### search - Search YouTube
+
+Search for videos, channels, or playlists. Returns JSON results.
 
 ```bash
+# Search videos
 python3 scripts/transcript_downloader.py search \
-  --query "machine learning tutorial" \
-  --type video \
+  --query "python tutorial" \
   --limit 5
+
+# Search channels
+python3 scripts/transcript_downloader.py search \
+  --query "Andrej Karpathy" \
+  --type channel
+
+# Search playlists
+python3 scripts/transcript_downloader.py search \
+  --query "deep learning course" \
+  --type playlist \
+  --limit 3
 ```
 
-### Batch Download
+| Argument | Short | Default | Description |
+|----------|-------|---------|-------------|
+| `--query` | `-q` | required | Search query |
+| `--type` | | video | video, channel, playlist |
+| `--limit` | `-l` | 10 | Max number of results |
 
-Download transcripts from a file containing URLs (one per line):
+### batch - Batch download from URL list
+
+Download transcripts for multiple videos from a text file (one URL per line). Lines starting with `#` are treated as comments.
 
 ```bash
+# Batch download as Markdown
 python3 scripts/transcript_downloader.py batch \
   --file urls.txt \
   --format markdown \
   --output-dir ./transcripts
+
+# Batch download as SRT
+python3 scripts/transcript_downloader.py batch \
+  --file urls.txt \
+  --format srt \
+  --output-dir ./subtitles
 ```
 
-## Trigger Words
+**urls.txt example:**
 
-- download transcript
-- YouTube transcript
-- get transcript
-- save subtitles
-- extract transcript
+```
+# AI lectures
+https://www.youtube.com/watch?v=VIDEO_ID_1
+https://www.youtube.com/watch?v=VIDEO_ID_2
+dQw4w9WgXcQ
+```
+
+| Argument | Short | Default | Description |
+|----------|-------|---------|-------------|
+| `--file` | | required | Text file with URLs (one per line) |
+| `--format` | `-f` | markdown | json, text, srt, vtt, markdown |
+| `--output-dir` | `-d` | ./transcripts | Output directory |
 
 ## Output Formats
 
-| Format | Extension | Description | Use Case |
+| Format | Extension | Description | Best For |
 |--------|-----------|-------------|----------|
-| json | .json | Structured segments with timestamps | Data processing, APIs |
-| text | .txt | Plain text transcript | Reading, LLM input |
-| srt | .srt | SubRip subtitle format | Video editing |
-| vtt | .vtt | WebVTT subtitle format | Web video players |
-| markdown | .md | Formatted with metadata header | Documentation, RAG |
+| json | .json | Structured segments with start/duration/text | Data processing, APIs, pipelines |
+| text | .txt | Plain text, optionally timestamped | LLM input, reading, RAG |
+| srt | .srt | SubRip subtitle format | Video editing, translation |
+| vtt | .vtt | WebVTT subtitle format | Web video players, HTML5 |
+| markdown | .md | Metadata header + paragraph-grouped text | Documentation, Notion, notes |
 
-## Arguments
+## Supported URL Formats
 
-| Argument | Short | Description |
-|----------|-------|-------------|
-| --api-key | -k | TranscriptAPI key (or set TRANSCRIPTAPI_KEY env var) |
-| --url | -u | YouTube URL or video ID |
-| --format | -f | Output format: json, text, srt, vtt, markdown |
-| --output | -o | Output file path |
-| --timestamps | -t | Include timestamps in output |
-| --metadata | -m | Include video metadata in response |
-| --query | -q | Search query (for search command) |
-| --type | | Search type: video, channel, playlist |
-| --limit | -l | Max search results (for search command) |
-| --file | | File with URLs for batch download |
-| --output-dir | -d | Output directory for batch downloads |
+The tool accepts any of these URL formats:
 
-## Example Workflow
+- `https://www.youtube.com/watch?v=dQw4w9WgXcQ`
+- `https://youtu.be/dQw4w9WgXcQ`
+- `https://youtube.com/embed/dQw4w9WgXcQ`
+- `https://youtube.com/shorts/dQw4w9WgXcQ`
+- `https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=120`
+- `dQw4w9WgXcQ` (bare video ID)
 
-**User says:**
-> Download the transcript for https://www.youtube.com/watch?v=dQw4w9WgXcQ
+## Configuration
 
-**Agent executes:**
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TRANSCRIPTAPI_KEY` | Yes | API key from transcriptapi.com (prefix: `sk_`) |
+
+## Workflow Examples
+
+### Extract transcript for LLM analysis
+
 ```bash
+# User: "Summarize this YouTube video for me"
 python3 scripts/transcript_downloader.py download \
-  --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" \
+  --url "https://youtube.com/watch?v=VIDEO_ID" \
+  --format text \
+  --output /tmp/transcript.txt
+
+# Then feed the text to Claude or another LLM for summarization
+```
+
+### Research a topic via YouTube
+
+```bash
+# Step 1: Search for relevant videos
+python3 scripts/transcript_downloader.py search \
+  --query "transformer architecture explained" \
+  --limit 5
+
+# Step 2: Download transcripts for selected videos
+python3 scripts/transcript_downloader.py download \
+  --url "VIDEO_ID_FROM_SEARCH" \
   --format markdown \
-  --output transcript.md
+  --output research/transformers.md
+```
+
+### Build a transcript corpus
+
+```bash
+# Step 1: Create a URL list
+cat > urls.txt << 'EOF'
+# Andrej Karpathy lectures
+https://www.youtube.com/watch?v=VIDEO_1
+https://www.youtube.com/watch?v=VIDEO_2
+https://www.youtube.com/watch?v=VIDEO_3
+EOF
+
+# Step 2: Batch download all transcripts
+python3 scripts/transcript_downloader.py batch \
+  --file urls.txt \
+  --format markdown \
+  --output-dir ./corpus
 ```
 
 ## Error Handling
 
-| HTTP Code | Meaning | Action |
-|-----------|---------|--------|
-| 400 | Bad request | Check parameters |
-| 401 | Invalid API key | Verify TRANSCRIPTAPI_KEY |
-| 402 | No credits remaining | Top up at transcriptapi.com |
-| 404 | Video not found | Verify URL |
-| 422 | Unprocessable | Check video has captions |
+| HTTP Code | Meaning | Resolution |
+|-----------|---------|------------|
+| 400 | Bad request | Check URL format and parameters |
+| 401 | Invalid API key | Verify `TRANSCRIPTAPI_KEY` is set correctly |
+| 402 | Credits exhausted | Top up credits at transcriptapi.com |
+| 404 | Video not found | Verify the video URL exists and is public |
+| 422 | Unprocessable | Video may not have captions/subtitles |
 
-## API Reference
+## Limitations
 
-- Base URL: `https://transcriptapi.com/api/v2`
-- Auth: Bearer token (`Authorization: Bearer sk_xxx`)
-- Docs: [transcriptapi.com/docs/api](https://transcriptapi.com/docs/api/)
-- Credits: 1 credit per API call, 100 free to start
+- Requires a TranscriptAPI.com API key (100 free credits on signup)
+- 1 credit consumed per successful API call
+- Videos without captions/auto-generated subtitles will return errors
+- Private or age-restricted videos may not be accessible
 
 ## Source
 
-Built on [TranscriptAPI.com](https://transcriptapi.com) REST API.
-Inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp) CLI patterns.
+- API: [TranscriptAPI.com](https://transcriptapi.com) | [API docs](https://transcriptapi.com/docs/api/)
+- CLI patterns inspired by [yt-dlp](https://github.com/yt-dlp/yt-dlp)

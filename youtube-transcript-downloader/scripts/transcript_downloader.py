@@ -2,11 +2,15 @@
 """
 YouTube Transcript Downloader - Download transcripts via TranscriptAPI.com
 
-Usage:
-    python3 transcript_downloader.py transcript --url "https://youtube.com/watch?v=VIDEO_ID"
-    python3 transcript_downloader.py search --query "topic" --limit 5
-    python3 transcript_downloader.py download --url "VIDEO_URL" --format srt --output out.srt
-    python3 transcript_downloader.py batch --file urls.txt --format markdown --output-dir ./transcripts
+Commands:
+    transcript  Fetch transcript and print structured JSON
+    download    Save transcript to file in SRT/VTT/Markdown/text/JSON
+    search      Search YouTube for videos, channels, or playlists
+    batch       Batch download transcripts from a URL list file
+
+Setup:
+    export TRANSCRIPTAPI_KEY="sk_your_api_key"
+    pip install requests
 """
 
 import argparse
@@ -14,17 +18,23 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 try:
     import requests
 except ImportError:
-    print("Error: requests library required. Install with: pip install requests", file=sys.stderr)
+    print(json.dumps({
+        "success": False,
+        "error": "requests library required. Install with: pip install requests",
+    }))
     sys.exit(1)
 
 
 API_BASE_URL = "https://transcriptapi.com/api/v2"
+
+
+# ── API Client ──────────────────────────────────────────────────────────────
 
 
 class TranscriptAPIClient:
@@ -39,23 +49,28 @@ class TranscriptAPIClient:
         })
 
     def _request(self, endpoint: str, params: dict = None) -> Dict:
-        """Make a GET request to the API."""
+        """Make a GET request to the API and return a standardized result dict."""
         url = f"{API_BASE_URL}{endpoint}"
         try:
             resp = self.session.get(url, params=params, timeout=60)
-            if resp.status_code == 401:
-                return {"success": False, "error": "Invalid API key. Check your TRANSCRIPTAPI_KEY."}
-            if resp.status_code == 402:
-                return {"success": False, "error": "No credits remaining. Top up at transcriptapi.com."}
-            if resp.status_code == 404:
-                return {"success": False, "error": "Video not found or no transcript available."}
-            if resp.status_code == 422:
-                return {"success": False, "error": "Unprocessable request. The video may not have captions."}
+
+            error_map = {
+                401: "Invalid API key. Check your TRANSCRIPTAPI_KEY.",
+                402: "No credits remaining. Top up at transcriptapi.com.",
+                404: "Video not found or no transcript available.",
+                422: "Unprocessable request. The video may not have captions.",
+            }
+            if resp.status_code in error_map:
+                return {"success": False, "error": error_map[resp.status_code],
+                        "status_code": resp.status_code}
             if resp.status_code >= 400:
-                return {"success": False, "error": f"API error {resp.status_code}: {resp.text[:200]}"}
+                return {"success": False, "status_code": resp.status_code,
+                        "error": f"API error {resp.status_code}: {resp.text[:200]}"}
+
             data = resp.json()
             data["success"] = True
             return data
+
         except requests.exceptions.Timeout:
             return {"success": False, "error": "Request timed out. The video may be very long."}
         except requests.exceptions.ConnectionError:
@@ -66,7 +81,14 @@ class TranscriptAPIClient:
     def get_transcript(self, video_url: str, fmt: str = "json",
                        include_timestamp: bool = True,
                        send_metadata: bool = False) -> Dict:
-        """Fetch transcript for a YouTube video."""
+        """Fetch transcript for a YouTube video.
+
+        Args:
+            video_url: YouTube URL or bare video ID.
+            fmt: Response format - "json" (structured segments) or "text" (plain).
+            include_timestamp: Whether segments include start/duration.
+            send_metadata: Whether to include title, duration, etc.
+        """
         params = {
             "video_url": video_url,
             "format": fmt,
@@ -78,7 +100,13 @@ class TranscriptAPIClient:
 
     def search(self, query: str, search_type: str = "video",
                limit: int = 10) -> Dict:
-        """Search YouTube for videos, channels, or playlists."""
+        """Search YouTube for videos, channels, or playlists.
+
+        Args:
+            query: Search query string.
+            search_type: One of "video", "channel", "playlist".
+            limit: Maximum number of results.
+        """
         params = {
             "q": query,
             "type": search_type,
@@ -87,8 +115,12 @@ class TranscriptAPIClient:
         return self._request("/youtube/search", params)
 
 
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+
 def extract_video_id(url: str) -> Optional[str]:
-    """Extract video ID from a YouTube URL or return the ID if already bare."""
+    """Extract 11-character video ID from any YouTube URL format, or return
+    the input if it is already a bare video ID."""
     if re.match(r'^[0-9A-Za-z_-]{11}$', url):
         return url
     patterns = [
@@ -113,7 +145,7 @@ def format_timestamp(seconds: float) -> str:
 
 
 def format_srt_timestamp(seconds: float) -> str:
-    """Format seconds as HH:MM:SS,mmm for SRT."""
+    """Format seconds as HH:MM:SS,mmm (SRT standard)."""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
@@ -122,7 +154,7 @@ def format_srt_timestamp(seconds: float) -> str:
 
 
 def format_vtt_timestamp(seconds: float) -> str:
-    """Format seconds as HH:MM:SS.mmm for WebVTT."""
+    """Format seconds as HH:MM:SS.mmm (WebVTT standard)."""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
@@ -130,31 +162,71 @@ def format_vtt_timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
+def sanitize_filename(name: str, max_len: int = 100) -> str:
+    """Remove characters unsafe for filenames and truncate."""
+    name = re.sub(r'[\\/*?:"<>|]', '', name)
+    name = name.replace(' ', '_')
+    return name[:max_len]
+
+
+def get_segments(data: Dict) -> List[Dict]:
+    """Extract transcript segments from API response.
+
+    The API may return segments under "transcript" or "segments" key.
+    Returns an empty list if the response is text-only.
+    """
+    if "transcript" in data and isinstance(data["transcript"], list):
+        return data["transcript"]
+    if "segments" in data and isinstance(data["segments"], list):
+        return data["segments"]
+    return []
+
+
+def _now_iso() -> str:
+    """Return current UTC timestamp in ISO 8601 format."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _output_json(data: Dict) -> None:
+    """Print a dict as formatted JSON to stdout."""
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _fail(error: str, meta: Dict = None) -> None:
+    """Print a standardized error JSON and exit."""
+    result = {"success": False, "error": error}
+    if meta:
+        result["meta"] = meta
+    _output_json(result)
+    sys.exit(1)
+
+
+# ── Format converters ───────────────────────────────────────────────────────
+
+
 def convert_to_srt(segments: List[Dict]) -> str:
-    """Convert transcript segments to SRT format."""
+    """Convert transcript segments to SRT subtitle format."""
     lines = []
     for i, seg in enumerate(segments, 1):
         start = seg.get("start", 0)
         duration = seg.get("duration", 0)
         end = start + duration
-        text = seg.get("text", "")
-        lines.append(f"{i}")
+        lines.append(str(i))
         lines.append(f"{format_srt_timestamp(start)} --> {format_srt_timestamp(end)}")
-        lines.append(text)
+        lines.append(seg.get("text", ""))
         lines.append("")
     return "\n".join(lines)
 
 
 def convert_to_vtt(segments: List[Dict]) -> str:
-    """Convert transcript segments to WebVTT format."""
+    """Convert transcript segments to WebVTT subtitle format."""
     lines = ["WEBVTT", ""]
     for seg in segments:
         start = seg.get("start", 0)
         duration = seg.get("duration", 0)
         end = start + duration
-        text = seg.get("text", "")
         lines.append(f"{format_vtt_timestamp(start)} --> {format_vtt_timestamp(end)}")
-        lines.append(text)
+        lines.append(seg.get("text", ""))
         lines.append("")
     return "\n".join(lines)
 
@@ -173,10 +245,10 @@ def convert_to_text(segments: List[Dict], with_timestamps: bool = False) -> str:
 
 
 def convert_to_markdown(segments: List[Dict], metadata: Dict = None) -> str:
-    """Convert transcript segments to Markdown format."""
+    """Convert transcript segments to Markdown with metadata header
+    and ~60-second paragraph grouping for readability."""
     lines = []
 
-    # Header with metadata
     title = "YouTube Transcript"
     if metadata:
         title = metadata.get("title", title)
@@ -196,17 +268,16 @@ def convert_to_markdown(segments: List[Dict], metadata: Dict = None) -> str:
     lines.append("## Transcript")
     lines.append("")
 
-    # Group segments into paragraphs (~60 second blocks)
-    paragraph = []
-    para_start = 0
+    # Group segments into ~60-second paragraphs
+    paragraph: List[str] = []
+    para_start = 0.0
     for seg in segments:
         start = seg.get("start", 0)
         text = seg.get("text", "")
         if not paragraph:
             para_start = start
         if start - para_start > 60 and paragraph:
-            ts = format_timestamp(para_start)
-            lines.append(f"**[{ts}]**")
+            lines.append(f"**[{format_timestamp(para_start)}]**")
             lines.append("")
             lines.append(" ".join(paragraph))
             lines.append("")
@@ -215,10 +286,8 @@ def convert_to_markdown(segments: List[Dict], metadata: Dict = None) -> str:
         else:
             paragraph.append(text)
 
-    # Flush remaining
     if paragraph:
-        ts = format_timestamp(para_start)
-        lines.append(f"**[{ts}]**")
+        lines.append(f"**[{format_timestamp(para_start)}]**")
         lines.append("")
         lines.append(" ".join(paragraph))
         lines.append("")
@@ -226,29 +295,27 @@ def convert_to_markdown(segments: List[Dict], metadata: Dict = None) -> str:
     return "\n".join(lines)
 
 
-def sanitize_filename(name: str, max_len: int = 100) -> str:
-    """Sanitize a string for use as a filename."""
-    name = re.sub(r'[\\/*?:"<>|]', '', name)
-    name = name.replace(' ', '_')
-    return name[:max_len]
-
-
-def get_segments(data: Dict) -> List[Dict]:
-    """Extract transcript segments from API response, handling different response shapes."""
-    # The API may return segments under different keys
-    if "transcript" in data and isinstance(data["transcript"], list):
-        return data["transcript"]
-    if "segments" in data and isinstance(data["segments"], list):
-        return data["segments"]
-    # If the response is text-only (format=text), there are no segments
-    return []
+def _convert(fmt: str, segments: List[Dict], metadata: Dict = None,
+             timestamps: bool = True) -> str:
+    """Dispatch to the appropriate format converter."""
+    converters = {
+        "json": lambda: json.dumps(segments, ensure_ascii=False, indent=2),
+        "text": lambda: convert_to_text(segments, with_timestamps=timestamps),
+        "srt": lambda: convert_to_srt(segments),
+        "vtt": lambda: convert_to_vtt(segments),
+        "markdown": lambda: convert_to_markdown(segments, metadata),
+    }
+    fn = converters.get(fmt)
+    if not fn:
+        _fail(f"Unknown format: {fmt}")
+    return fn()
 
 
 # ── Command handlers ────────────────────────────────────────────────────────
 
 
 def cmd_transcript(client: TranscriptAPIClient, args):
-    """Handle the 'transcript' command."""
+    """Fetch transcript and print structured JSON to stdout."""
     result = client.get_transcript(
         video_url=args.url,
         fmt="json",
@@ -256,19 +323,34 @@ def cmd_transcript(client: TranscriptAPIClient, args):
         send_metadata=args.metadata,
     )
     if not result.get("success"):
-        print(f"Error: {result.get('error', 'Unknown error')}", file=sys.stderr)
-        sys.exit(1)
+        _fail(result.get("error", "Unknown error"),
+              meta={"command": "transcript", "url": args.url})
 
-    # Print JSON to stdout
-    result.pop("success", None)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    video_id = result.get("video_id") or extract_video_id(args.url)
+    segments = get_segments(result)
+
+    _output_json({
+        "success": True,
+        "data": {
+            "video_id": video_id,
+            "language": result.get("language"),
+            "title": result.get("title"),
+            "duration": result.get("duration"),
+            "segment_count": len(segments),
+            "transcript": segments,
+        },
+        "meta": {
+            "command": "transcript",
+            "timestamp": _now_iso(),
+            "url": args.url,
+        },
+    })
 
 
 def cmd_download(client: TranscriptAPIClient, args):
-    """Handle the 'download' command."""
+    """Download transcript and convert to requested format."""
     fmt = args.format
 
-    # Always fetch JSON from API so we have structured segments
     result = client.get_transcript(
         video_url=args.url,
         fmt="json",
@@ -276,101 +358,75 @@ def cmd_download(client: TranscriptAPIClient, args):
         send_metadata=True,
     )
     if not result.get("success"):
-        print(f"Error: {result.get('error', 'Unknown error')}", file=sys.stderr)
-        sys.exit(1)
+        _fail(result.get("error", "Unknown error"),
+              meta={"command": "download", "url": args.url, "format": fmt})
 
     segments = get_segments(result)
+
+    # Fallback: if no structured segments, try the text endpoint
     if not segments:
-        # Fallback: try text format from API
         text_result = client.get_transcript(
-            video_url=args.url,
-            fmt="text",
-            include_timestamp=False,
-        )
+            video_url=args.url, fmt="text", include_timestamp=False)
         if text_result.get("success"):
-            raw_text = text_result.get("transcript", text_result.get("text", ""))
-            if isinstance(raw_text, str) and raw_text.strip():
-                content = raw_text
-                if args.output:
-                    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-                    with open(args.output, "w", encoding="utf-8") as f:
-                        f.write(content)
-                    print(f"Saved to {args.output} ({len(content)} chars)", file=sys.stderr)
-                else:
-                    print(content)
+            raw = text_result.get("transcript", text_result.get("text", ""))
+            if isinstance(raw, str) and raw.strip():
+                _write_output(raw, args.output)
                 return
-        print("Error: No transcript segments found.", file=sys.stderr)
-        sys.exit(1)
+        _fail("No transcript segments found.",
+              meta={"command": "download", "url": args.url})
 
     metadata = {k: result.get(k) for k in ("video_id", "title", "language", "duration")}
-
-    # Convert to requested format
-    if fmt == "json":
-        content = json.dumps(segments, ensure_ascii=False, indent=2)
-    elif fmt == "text":
-        content = convert_to_text(segments, with_timestamps=args.timestamps)
-    elif fmt == "srt":
-        content = convert_to_srt(segments)
-    elif fmt == "vtt":
-        content = convert_to_vtt(segments)
-    elif fmt == "markdown":
-        content = convert_to_markdown(segments, metadata)
-    else:
-        print(f"Error: Unknown format '{fmt}'", file=sys.stderr)
-        sys.exit(1)
-
-    if args.output:
-        os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"Saved to {args.output} ({len(content)} chars)", file=sys.stderr)
-    else:
-        print(content)
+    content = _convert(fmt, segments, metadata, timestamps=args.timestamps)
+    _write_output(content, args.output)
 
 
 def cmd_search(client: TranscriptAPIClient, args):
-    """Handle the 'search' command."""
+    """Search YouTube and print results as JSON."""
     result = client.search(
         query=args.query,
         search_type=args.type,
         limit=args.limit,
     )
     if not result.get("success"):
-        print(f"Error: {result.get('error', 'Unknown error')}", file=sys.stderr)
-        sys.exit(1)
+        _fail(result.get("error", "Unknown error"),
+              meta={"command": "search", "query": args.query})
 
     result.pop("success", None)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    _output_json({
+        "success": True,
+        "data": result,
+        "meta": {
+            "command": "search",
+            "timestamp": _now_iso(),
+            "query": args.query,
+            "type": args.type,
+            "limit": args.limit,
+        },
+    })
 
 
 def cmd_batch(client: TranscriptAPIClient, args):
-    """Handle the 'batch' command - download transcripts for multiple URLs."""
+    """Batch download transcripts from a file of URLs."""
     if not os.path.isfile(args.file):
-        print(f"Error: File not found: {args.file}", file=sys.stderr)
-        sys.exit(1)
+        _fail(f"File not found: {args.file}",
+              meta={"command": "batch", "file": args.file})
 
     with open(args.file, "r", encoding="utf-8") as f:
         urls = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
     if not urls:
-        print("Error: No URLs found in file.", file=sys.stderr)
-        sys.exit(1)
+        _fail("No URLs found in file.",
+              meta={"command": "batch", "file": args.file})
 
-    output_dir = args.output_dir or "./transcripts"
+    output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
     fmt = args.format
 
-    ext_map = {
-        "json": ".json",
-        "text": ".txt",
-        "srt": ".srt",
-        "vtt": ".vtt",
-        "markdown": ".md",
-    }
+    ext_map = {"json": ".json", "text": ".txt", "srt": ".srt",
+               "vtt": ".vtt", "markdown": ".md"}
     ext = ext_map.get(fmt, ".txt")
 
-    success_count = 0
-    fail_count = 0
+    results = []
 
     for i, url in enumerate(urls, 1):
         video_id = extract_video_id(url)
@@ -378,51 +434,77 @@ def cmd_batch(client: TranscriptAPIClient, args):
         print(f"[{i}/{len(urls)}] Processing {label}...", file=sys.stderr)
 
         result = client.get_transcript(
-            video_url=url,
-            fmt="json",
-            include_timestamp=True,
-            send_metadata=True,
-        )
+            video_url=url, fmt="json", include_timestamp=True, send_metadata=True)
 
         if not result.get("success"):
-            print(f"  FAILED: {result.get('error', 'Unknown error')}", file=sys.stderr)
-            fail_count += 1
+            error_msg = result.get("error", "Unknown error")
+            print(f"  FAILED: {error_msg}", file=sys.stderr)
+            results.append({"url": url, "success": False, "error": error_msg})
             continue
 
         segments = get_segments(result)
         metadata = {k: result.get(k) for k in ("video_id", "title", "language", "duration")}
 
-        # Build filename
         title = result.get("title") or video_id or f"video_{i}"
         filename = sanitize_filename(title) + ext
         filepath = os.path.join(output_dir, filename)
 
-        if fmt == "json":
-            content = json.dumps(segments, ensure_ascii=False, indent=2)
-        elif fmt == "text":
-            content = convert_to_text(segments)
-        elif fmt == "srt":
-            content = convert_to_srt(segments)
-        elif fmt == "vtt":
-            content = convert_to_vtt(segments)
-        elif fmt == "markdown":
-            content = convert_to_markdown(segments, metadata)
-        else:
-            content = convert_to_text(segments)
+        content = _convert(fmt, segments, metadata)
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
 
         print(f"  Saved: {filepath} ({len(content)} chars)", file=sys.stderr)
-        success_count += 1
+        results.append({
+            "url": url,
+            "success": True,
+            "video_id": video_id,
+            "output": filepath,
+            "chars": len(content),
+            "segments": len(segments),
+        })
 
-    print(f"\nDone. {success_count} succeeded, {fail_count} failed.", file=sys.stderr)
+    succeeded = sum(1 for r in results if r["success"])
+    failed = sum(1 for r in results if not r["success"])
+    print(f"\nDone. {succeeded} succeeded, {failed} failed.", file=sys.stderr)
+
+    _output_json({
+        "success": True,
+        "data": {"results": results},
+        "meta": {
+            "command": "batch",
+            "timestamp": _now_iso(),
+            "total": len(urls),
+            "succeeded": succeeded,
+            "failed": failed,
+            "format": fmt,
+            "output_dir": output_dir,
+        },
+    })
+
+
+# ── Output helpers ──────────────────────────────────────────────────────────
+
+
+def _write_output(content: str, output_path: Optional[str]) -> None:
+    """Write content to a file or stdout."""
+    if output_path:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(json.dumps({
+            "success": True,
+            "meta": {"output": output_path, "chars": len(content)},
+        }))
+    else:
+        print(content)
 
 
 # ── CLI entry point ─────────────────────────────────────────────────────────
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
         description="YouTube Transcript Downloader - powered by TranscriptAPI.com",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -440,47 +522,52 @@ def main():
         help="TranscriptAPI key (default: TRANSCRIPTAPI_KEY env var)",
     )
 
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # ── transcript ──
-    p_transcript = subparsers.add_parser("transcript", help="Fetch transcript and print as JSON")
-    p_transcript.add_argument("--url", "-u", required=True, help="YouTube URL or video ID")
-    p_transcript.add_argument("--timestamps", "-t", action="store_true", default=True,
-                              help="Include timestamps (default: true)")
-    p_transcript.add_argument("--no-timestamps", dest="timestamps", action="store_false",
-                              help="Exclude timestamps")
-    p_transcript.add_argument("--metadata", "-m", action="store_true",
-                              help="Include video metadata")
+    p = sub.add_parser("transcript", help="Fetch transcript and print as JSON")
+    p.add_argument("--url", "-u", required=True, help="YouTube URL or video ID")
+    p.add_argument("--timestamps", "-t", action="store_true", default=True,
+                   help="Include timestamps (default: true)")
+    p.add_argument("--no-timestamps", dest="timestamps", action="store_false",
+                   help="Exclude timestamps")
+    p.add_argument("--metadata", "-m", action="store_true",
+                   help="Include video metadata (title, duration)")
 
     # ── download ──
-    p_download = subparsers.add_parser("download", help="Download transcript in a specific format")
-    p_download.add_argument("--url", "-u", required=True, help="YouTube URL or video ID")
-    p_download.add_argument("--format", "-f", default="markdown",
-                            choices=["json", "text", "srt", "vtt", "markdown"],
-                            help="Output format (default: markdown)")
-    p_download.add_argument("--output", "-o", help="Output file path (default: stdout)")
-    p_download.add_argument("--timestamps", "-t", action="store_true", default=True,
-                            help="Include timestamps for text format")
-    p_download.add_argument("--no-timestamps", dest="timestamps", action="store_false")
+    p = sub.add_parser("download", help="Download transcript in a specific format")
+    p.add_argument("--url", "-u", required=True, help="YouTube URL or video ID")
+    p.add_argument("--format", "-f", default="markdown",
+                   choices=["json", "text", "srt", "vtt", "markdown"],
+                   help="Output format (default: markdown)")
+    p.add_argument("--output", "-o", help="Output file path (default: stdout)")
+    p.add_argument("--timestamps", "-t", action="store_true", default=True,
+                   help="Include timestamps for text format")
+    p.add_argument("--no-timestamps", dest="timestamps", action="store_false")
 
     # ── search ──
-    p_search = subparsers.add_parser("search", help="Search YouTube videos, channels, or playlists")
-    p_search.add_argument("--query", "-q", required=True, help="Search query")
-    p_search.add_argument("--type", default="video",
-                          choices=["video", "channel", "playlist"],
-                          help="Result type (default: video)")
-    p_search.add_argument("--limit", "-l", type=int, default=10,
-                          help="Max results (default: 10)")
+    p = sub.add_parser("search", help="Search YouTube videos, channels, or playlists")
+    p.add_argument("--query", "-q", required=True, help="Search query")
+    p.add_argument("--type", default="video",
+                   choices=["video", "channel", "playlist"],
+                   help="Result type (default: video)")
+    p.add_argument("--limit", "-l", type=int, default=10,
+                   help="Max results (default: 10)")
 
     # ── batch ──
-    p_batch = subparsers.add_parser("batch", help="Batch download transcripts from a URL list file")
-    p_batch.add_argument("--file", required=True, help="File with URLs (one per line)")
-    p_batch.add_argument("--format", "-f", default="markdown",
-                         choices=["json", "text", "srt", "vtt", "markdown"],
-                         help="Output format (default: markdown)")
-    p_batch.add_argument("--output-dir", "-d", default="./transcripts",
-                         help="Output directory (default: ./transcripts)")
+    p = sub.add_parser("batch", help="Batch download transcripts from a URL list file")
+    p.add_argument("--file", required=True, help="File with URLs (one per line)")
+    p.add_argument("--format", "-f", default="markdown",
+                   choices=["json", "text", "srt", "vtt", "markdown"],
+                   help="Output format (default: markdown)")
+    p.add_argument("--output-dir", "-d", default="./transcripts",
+                   help="Output directory (default: ./transcripts)")
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if not args.command:
@@ -488,19 +575,18 @@ def main():
         sys.exit(1)
 
     if not args.api_key:
-        print("Error: API key required. Set TRANSCRIPTAPI_KEY env var or use --api-key.", file=sys.stderr)
-        sys.exit(1)
+        _fail("API key required. Set TRANSCRIPTAPI_KEY env var or use --api-key.",
+              meta={"command": args.command})
 
     client = TranscriptAPIClient(args.api_key)
 
-    commands = {
+    handlers = {
         "transcript": cmd_transcript,
         "download": cmd_download,
         "search": cmd_search,
         "batch": cmd_batch,
     }
-
-    commands[args.command](client, args)
+    handlers[args.command](client, args)
 
 
 if __name__ == "__main__":
