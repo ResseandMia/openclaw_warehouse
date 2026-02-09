@@ -93,9 +93,11 @@ Authorization: 你的密钥
 - 3: 失败
 
 ```bash
-export NANOBANANA_KEY="your_api_key_here"
+export NANOBANANA_KEY="RS3onk9L9pkY237VGMRsJIWsXG"
 export NANOBANANA_API_URL="https://api.wuyinkeji.com/api/img/nanoBanana-pro"
 ```
+
+**注意**: API Key 已配置，可直接使用。
 
 ---
 
