@@ -14,6 +14,20 @@ description: |
 
 ---
 
+## ⚠️ 强制规则（每次执行必须遵守）
+
+1. **模型要求：** 所有 LLM 生成任务（内容消化、图片 prompt）必须使用 **Kimi K2.5** 模型。禁止使用 MiniMax、其他模型或简化处理。如果 Kimi K2.5 不可用，立即报错停止，不要静默降级。
+
+2. **字幕来源：** 必须通过 **TranscriptAPI** 获取完整字幕原文。禁止使用视频摘要、视频描述、或自行生成总结来替代字幕。如果 TranscriptAPI 返回错误，报错停止，不要用其他方式替代。
+
+3. **图片 Prompt 必须包含 Base Style：** 每段图片 prompt 必须以指定的 base style 前缀开头（见 Step 3 详细规范）。这是硬编码的，不由 LLM 自由发挥。
+
+4. **状态报告必须准确：** 每个步骤完成后，报告的状态必须与实际执行结果一致。如果图片生成失败用了降级方案，必须明确告知用户"图片生成失败，已使用缩略图替代"，不要说"已成功生成图片"。
+
+5. **Notion 写入必须完整：** 如果内容较长，必须分段写入（见 Step 5 分段策略）。写入后必须验证内容完整性。
+
+---
+
 ## 整体架构
 
 ```
@@ -35,9 +49,9 @@ youtube-monitor → 新视频全部存入「待处理队列」→ 通知用户�
 | 1 | youtube-monitor | 监控频道更新，存入待处理队列 | 免费 |
 | 1.5 | queue-manager | 管理待处理队列，每日取 2 篇处理 | 免费 |
 | 2 | youtube-transcript | 获取视频字幕 | 1 credit/视频 |
-| 3 | content-digest | 内容消化：存档版 + 二创版 + 图片 prompt | LLM token |
+| 3 | content-digest | 内容消化：存档版 + 二创版 + 图片 prompt | LLM token（Kimi K2.5） |
 | 4 | image-generation | 生成封面图 + 配图 + 图文卡片 | ¥0.09/篇 |
-| 5 | notion-storage | 图文合并写入 Notion | 免费 |
+| 5 | notion-storage | 图文合并写入 Notion（分段写入） | 免费 |
 | 6 | wechat-draft | 存入微信公众号草稿 | 免费（OpenClaw 已有 skill） |
 
 ---
@@ -252,9 +266,11 @@ date:发现日期:is_datetime = 0
 当前队列仍有 {total} 条待处理。
 ```
 
-### 错误处理
-- 某个频道 API 调用失败 → 跳过该频道，继续处理其他频道，最后报告失败的频道
-- Channel ID resolve 失败 → 在监听清单备注字段写入 "Channel ID 解析失败，请检查 Handle"
+### ✅ Step 1 质量门禁
+- [ ] 至少成功查询了 1 个频道的更新
+- [ ] 所有写入队列的记录都有完整字段（标题、链接、博主、优先级、状态）
+- [ ] 无重复录入
+- 如果全部频道查询失败 → 停止流程，通知用户 "频道更新检查失败，请检查 API 密钥"
 
 ---
 
@@ -293,8 +309,6 @@ date:发现日期:is_datetime = 0
 
 ### 手动指定处理
 
-用户可以跳过自动排序，手动指定：
-
 | 用户指令 | 行为 |
 |---------|------|
 | "处理队列里的第 3 条" | 按默认排序的第 3 条 |
@@ -303,7 +317,7 @@ date:发现日期:is_datetime = 0
 | "跳过第 1 条" | 将第 1 条状态改为 ❌ 跳过 |
 
 ### 错误处理
-- 某条视频处理失败（如字幕提取失败）→ 保持当前状态不变，在 `备注` 字段写入错误原因
+- 某条视频处理失败 → 保持当前状态不变，在 `备注` 字段写入具体错误原因
 - 继续处理下一条，不因单条失败中断整个批次
 
 ### 完成通知
@@ -318,6 +332,16 @@ date:发现日期:is_datetime = 0
 队列剩余：{remaining} 条待处理
 ```
 
+如有失败：
+```
+⚠️ 今日播客处理完成（有异常）
+
+1. ✅ Alex Hormozi — "How I Made $100M" → 已存入知识库 + 微信草稿
+2. ❌ Fraser Cottrell — "Meta Ads Strategy 2026" → 字幕提取失败（该视频无可用字幕）
+
+队列剩余：{remaining} 条待处理（含 1 条失败未处理）
+```
+
 ---
 
 ## Step 2: youtube-transcript
@@ -325,13 +349,22 @@ date:发现日期:is_datetime = 0
 ### 触发
 queue-manager 选定视频后自动进入。
 
+### ⚠️ 强制要求
+**必须调用 TranscriptAPI 获取真实字幕。禁止以下替代方案：**
+- ❌ 用视频标题/描述猜测内容
+- ❌ 用其他摘要 API 替代
+- ❌ 用 LLM 直接生成"大概内容"
+- ❌ 只获取部分字幕
+
+**如果 TranscriptAPI 不可用或该视频无字幕 → 立即停止该视频的处理，在队列备注写明原因，跳到下一条。**
+
 ### 执行流程
 
 ```
 1. 从队列记录获取视频链接
-2. 更新队列状态 → 📋 已提取字幕
-3. 调用 TranscriptAPI 获取字幕
-4. 解析响应，提取字幕文本和元数据
+2. 更新队列状态 → 📋 已提取字幕（注意：这里先更新状态再调 API，表示已进入此阶段）
+3. 调用 TranscriptAPI 获取完整字幕
+4. 验证字幕完整性（见质量门禁）
 5. 将结果传递给 Step 3
 ```
 
@@ -351,8 +384,6 @@ Authorization: Bearer {{TRANSCRIPT_API_KEY}}
 
 ### 响应解析
 
-响应中需要提取的字段：
-
 ```json
 {
   "title": "视频标题",
@@ -363,8 +394,8 @@ Authorization: Bearer {{TRANSCRIPT_API_KEY}}
 }
 ```
 
-- `duration`：秒数，转为分钟后传给 Step 3 用于动态长度控制
-- `transcript`：完整字幕文本，作为 Step 3 的输入
+- `duration`：秒数，需转换为分钟 → `Math.round(duration / 60)`
+- `transcript`：完整字幕文本
 
 ### 费用
 1 credit / 视频
@@ -382,9 +413,11 @@ metadata:
   published: 发布日期
 ```
 
-### 错误处理
-- 字幕不可用（如无字幕的视频）→ 在队列备注写入 "该视频无可用字幕"，跳过此视频
-- API 超时或 5xx → 重试 1 次，仍失败则跳过并记录错误
+### ✅ Step 2 质量门禁
+- [ ] `transcript` 字段非空
+- [ ] 字幕文本长度 > 500 字符（低于此值说明字幕不完整或提取失败）
+- [ ] `duration` 字段有值（用于 Step 3 动态长度控制）
+- 如果任一条件不满足 → 队列备注写入 "字幕提取不完整：{具体原因}"，跳过此视频
 
 ---
 
@@ -392,27 +425,34 @@ metadata:
 
 这是整个工作流的核心智能步骤。接收字幕原文，产出三项内容：版本 A（存档版）、版本 B（二创版）、3 段图片 prompt。
 
+### ⚠️ 强制要求
+- **必须使用 Kimi K2.5 模型**，不要使用其他模型
+- **必须基于 Step 2 返回的完整字幕原文**生成内容，不要基于摘要或自行理解
+- **版本 B 文章必须严格遵循写作风格要求**（见下方 prompt），不要生成通稿式教科书文体
+
 ### 触发
 Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 处理中`。
 
 ### 输入
-- `transcript_text`：完整字幕纯文本
+- `transcript_text`：来自 Step 2 的完整字幕纯文本
 - `metadata`：标题、频道、时长（分钟）、链接、缩略图、发布日期
 
 ### 长度动态控制
 
-根据视频时长自动调整输出规模：
+根据 `metadata.duration_minutes` 选择对应档位：
 
-| 视频时长 | 版本 A 观点提取数 | 版本 B 字数 |
-|---------|-----------------|------------|
+| 视频时长 | 版本 A 观点提取数 | 版本 B 字数目标 |
+|---------|-----------------|---------------|
 | < 10 min | 3-5 条 | 600-800 字 |
 | 10-20 min | 5-8 条 | 800-1000 字 |
 | 20-40 min | 8-12 条 | 1000-1200 字 |
 | > 40 min | 10-15 条 | 1200-1500 字 |
 
-### 输出 1：版本 A — Notion 存档版（结构化摘要）
+---
 
-#### Prompt
+### 输出 1：版本 A — Notion 存档版
+
+#### Prompt（发送给 Kimi K2.5）
 
 ```
 你是一个内容消化助手。请根据以下视频字幕，生成结构化的内容摘要。
@@ -431,9 +471,9 @@ Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 
 请严格按以下结构输出，使用中文。英文专业术语保留原文并用括号标注中文含义（如 "hook framework（钩子框架）"）。
 
 ### 一句话总结
-用 20-30 个中文字概括这个视频的核心内容。要求精准、有信息量，不要泛泛而谈。
-例如好的："分享了 3 种低预算下冷启动 Meta 广告的投放策略和素材制作方法"
-例如差的："讨论了关于广告投放的一些方法"
+用 20-30 个中文字概括这个视频的核心内容。要精准、有信息量。
+✅ 好的例子："分享了 3 种低预算下冷启动 Meta 广告的投放策略和素材制作方法"
+❌ 差的例子："讨论了关于广告投放的一些方法"
 
 ### 核心要点
 提炼 3-5 条 key takeaways，每条 1-2 句话。这是"如果只能记住几件事"的那几件事。
@@ -442,18 +482,17 @@ Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 
 提取 {viewpoint_count} 条独立观点或知识点。每条包含：
 - 观点标题（10 字以内，加粗）
 - 观点内容（2-3 句话展开说明）
-- 如果原文有具体数据、案例、方法论步骤，必须保留原始细节
+- 如果原文有具体数据、案例、方法论步骤，必须保留原始细节，不要模糊概括
 
 ### 金句引用
-从原文中提取 2-3 句最有价值、最有洞察力的原话。
-格式：英文原文 + 中文翻译
-选择标准：有洞察力、有记忆点、值得反复回味的句子。不要选平淡的陈述句。
+从原文中提取 2-3 句最有价值的原话。
+格式：英文原文 + 中文翻译。
+选择标准：有洞察力、有记忆点、能独立传播的句子。不要选平淡的过渡句。
 
 ### 行动建议
-提炼 2-3 条可执行的 action items。
-要求：具体、可操作，动词开头。
-例如好的："在下一次广告测试中，先用 3 个不同 hook 测试 CTR，再对胜出的 hook 迭代 body copy"
-例如差的："优化你的广告策略"
+提炼 2-3 条可执行的 action items。动词开头，具体可操作。
+✅ 好的例子："在下一次广告测试中，先用 3 个不同 hook 测试 CTR，再对胜出的 hook 迭代 body copy"
+❌ 差的例子："优化你的广告策略"
 ```
 
 #### 输出格式
@@ -466,7 +505,6 @@ Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 
 1. {takeaway_1}
 2. {takeaway_2}
 3. {takeaway_3}
-...
 
 ### 观点提取
 **{观点标题1}**
@@ -474,7 +512,6 @@ Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 
 
 **{观点标题2}**
 {观点内容2}
-...
 
 ### 金句引用
 > "{英文原文1}" — {speaker}
@@ -482,7 +519,6 @@ Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 
 
 > "{英文原文2}" — {speaker}
 > 翻译：{中文翻译2}
-...
 
 ### 行动建议
 1. {action_1}
@@ -492,9 +528,9 @@ Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 
 
 ---
 
-### 输出 2：版本 B — 微信/小红书二创版（~1000 字自然文章）
+### 输出 2：版本 B — 微信/小红书二创版
 
-#### Prompt（核心 prompt，决定文章质量）
+#### Prompt（发送给 Kimi K2.5 — 这是最关键的 prompt）
 
 ```
 你是一个擅长内容二创的中文博主。你的读者是做跨境电商和数字营销的中国从业者。
@@ -509,133 +545,172 @@ Step 2 字幕提取完成后自动进入。同时更新队列状态 → `✍️ 
 ## 字幕原文
 {transcript_text}
 
-## 写作风格（极其重要，必须严格遵守）
+## 写作风格（极其重要，必须严格遵守，违反任何一条都算失败）
 
-1. **语气**：像跟朋友聊天，不是写教科书。你在分享你看了一个很棒的视频后的心得和感悟，带有自己的吐槽和点评。想象你在微信群里给做电商的朋友安利一个好视频。
+### 语气和人设
+你在分享你看了一个很棒的视频后的心得。像在微信群里给做电商的朋友安利一个好视频，带有自己的吐槽和点评。不是在写公众号"专业文章"，是在跟朋友唠嗑。
 
-2. **阅读水平**：四五年级就能看懂的中文。不用"赋能""底层逻辑""认知升维""范式转移"这类大词。说人话。用最简单直白的方式表达。
+### 用词标准
+四五年级就能看懂的中文。禁止使用以下词汇：赋能、底层逻辑、认知升维、范式转移、打法、抓手、颗粒度、闭环、对齐、拉齐、沉淀、心智、势能、链路。说人话。
 
-3. **段落**：短段落，每段 2-4 句话最多。段落之间自然过渡，不要用"首先...其次...最后..."这种机械结构。像聊天一样自然地转换话题。
+### 段落格式
+- 短段落，每段 2-4 句话最多
+- 段落之间自然过渡，禁止"首先...其次...最后..."结构
+- 像发微信消息一样自然
 
-4. **格式禁忌**：
-   - ❌ 不要用 emoji 做段落装饰（全文最多出现 2-3 个 emoji）
-   - ❌ 不要用 bullet point / 编号列表罗列知识点
-   - ❌ 不要用加粗标题做段落分隔
-   - ❌ 不要用表格
-   - ❌ 不要用 "一、二、三" 或 "第一点、第二点" 分段
-   - ✅ 用连贯的自然段落讲述，就像微信上给朋友发长消息
+### 绝对禁止的格式
+- ❌ emoji 做段落装饰（全文最多 2-3 个 emoji）
+- ❌ bullet point / 编号列表罗列知识点
+- ❌ 加粗标题做段落分隔（如 **第一点：XXXX**）
+- ❌ 表格
+- ❌ "一、二、三" 或 "第一点、第二点" 分段
+- ❌ 每段结尾都带感叹号
+- ✅ 用连贯的自然段落讲述
 
-5. **英文术语**：自然嵌入，不刻意翻译。
-   - ✅ "他提到的这个 hook framework 其实挺简单的"
-   - ❌ "他提到的这个钩子框架（hook framework）其实挺简单的"
+### 英文术语处理
+自然嵌入，不刻意翻译。
+✅ "他提到的这个 hook framework 其实挺简单的"
+❌ "他提到的这个钩子框架（hook framework）其实挺简单的"
 
-6. **开头**：必须抓人。可以用反常识、痛点共鸣、场景带入、数据冲击、提问等方式。
-   - ❌ 绝对禁止："今天给大家分享..."、"最近看了一个视频..."、"大家好，今天我们来聊聊..."
-   - ✅ 好的开头示例："花了 5000 块投广告，转化了 0 单——这事儿你经历过吧？"
-   - ✅ 好的开头示例："你知道那些月销百万的 Shopify 店铺，广告素材其实都长一个样吗？"
+### 开头要求
+必须抓人，前 2 句话就要让人想继续读。
+✅ 允许的开头方式：反常识、痛点共鸣、场景带入、数据冲击、直接提问
+❌ 绝对禁止的开头：
+  - "今天给大家分享..."
+  - "最近看了一个视频..."
+  - "大家好，今天我们来聊聊..."
+  - "在数字营销领域..."
+  - "随着XXX的发展..."
 
-7. **结尾**：带互动引导。问读者一个具体的问题，或邀请他们分享经验，让人有回复的冲动。
-   - ✅ "你们投 Meta 广告的时候，一般第一轮测几个素材？评论区聊聊"
-   - ❌ "希望这篇文章对大家有所帮助，欢迎点赞转发"
+✅ 好的开头示例：
+  - "花了 5000 块投广告，转化了 0 单——这事儿你经历过吧？"
+  - "你知道那些月销百万的 Shopify 店铺，广告素材其实都长一个样吗？"
+  - "上周我把一个广告的 hook 换了一句话，ROAS 从 1.2 直接飙到 3.8。"
 
-8. **干货密度**：有实质内容，有具体方法/案例/数据。但不是干巴巴罗列知识点——要有你自己的解读、延伸思考和吐槽。大概 60% 干货 + 40% 个人观点。
+### 结尾要求
+带互动引导，抛出一个具体的、让人有回复冲动的问题。
+✅ "你们投 Meta 广告的时候，一般第一轮测几个素材？评论区聊聊"
+❌ "希望这篇文章对大家有所帮助，欢迎点赞转发"
 
-9. **个人观点**：必须包含。这是区别于"AI 总结"的关键。
-   - "说实话这一点我不太同意，因为国内的情况是..."
-   - "我觉得这个方法如果用在独立站上，可能要调整一下..."
-   - "这让我想到之前看过的一个案例..."
-   - "坦白讲这个操作门槛还挺高的，一般小团队估计..."
+### 干货与观点比例
+60% 干货（具体方法/案例/数据）+ 40% 个人观点（你自己的解读、延伸、吐槽）
 
-10. **真实感**：写出来的东西要像一个真人写的。可以有口语化表达、可以有不确定的语气、可以有偶尔的跑题和拉回。不要每一段都完美工整。
+### 个人观点（必须包含，这是区别于 AI 总结的关键）
+至少包含 3 处个人点评，自然嵌入正文中。可以是：
+- "说实话这一点我不太同意，因为国内的情况是..."
+- "我觉得这个方法如果用在独立站上，可能要调整一下..."
+- "这让我想到之前看过的一个案例..."
+- "坦白讲这个操作门槛还挺高的，一般小团队估计..."
 
-## 文章结构（灵活参考，不是固定模板，根据内容自然组织）
+### 真实感
+写出来要像真人写的。可以有口语化表达、不确定的语气、偶尔跑题再拉回。不要每段都完美工整。
+
+## 文章结构（灵活参考，根据内容自然组织，不要死板套用）
 
 [IMAGE:cover]
 
-{抓人开头 — 1-2 段，用痛点/反常识/提问/场景把读者拉进来}
+{抓人开头 — 1-2 段}
 
-{核心内容展开 — 围绕视频中最有价值的 2-3 个点，用故事、案例、比喻串联。不是"第一点...第二点..."的罗列，是像讲故事一样自然推进。每个点之间用自然的口语化过渡连接。}
+{核心内容展开 — 围绕视频中最有价值的 2-3 个点，用故事、案例、比喻串联。像讲故事一样推进，不是罗列知识点。}
 
 [IMAGE:inline]
 
-{延伸思考/个人点评 — 你对这些观点的看法，结合国内跨境电商/营销的实际情况做延伸。可以表达不同意的地方、补充自己的经验、或分析在不同场景下的适用性。}
+{延伸思考/个人点评 — 结合国内跨境电商/营销实际情况}
 
-{结尾互动引导 — 抛出一个具体的、让人有回复冲动的问题}
+{结尾互动引导}
 
 ## 图片占位符规则
-- `[IMAGE:cover]` 固定放在文章最开头（第一个位置）
-- `[IMAGE:inline]` 放在文章中间，你认为最合适的话题转折点或视觉停顿点
-- 两个占位符各自单独占一行，前后各空一行
+- [IMAGE:cover] 固定放在文章最开头第一行
+- [IMAGE:inline] 放在文章中间你认为最合适的话题转折点
+- 每个占位符单独占一行，前后各空一行
 - 不要在文章末尾放图片
 
 ## 字数要求
 {word_count_range} 字（不含图片占位符行）
 
 ## 输出
-只输出文章正文（包含两个图片占位符）。
-不要输出标题。不要输出任何前缀如"以下是文章"。不要输出任何后缀。直接输出文章内容。
+只输出文章正文（包含两个图片占位符）。不要输出标题、前缀、后缀。直接输出内容。
 ```
 
 ---
 
-### 输出 3：图片 Prompt（3 段英文 prompt）
+### 输出 3：图片 Prompt
 
-#### Prompt
+#### ⚠️ 图片 Prompt 生成规则（硬编码）
+
+**Base Style 前缀（以下文本必须原样出现在每个 prompt 的开头，不可修改、不可省略、不可替换）：**
 
 ```
-Based on the video content below, generate 3 image prompts for AI image generation (Nano Banana Pro model).
+cute kawaii-style digital illustration, warm beige/cream background, soft pastel colors, rounded cartoon elements, cheerful decorative details like confetti and banners, clean layout, friendly and professional, flat design with subtle shadows,
+```
+
+**生成方式：不要让 LLM 自由发挥整段 prompt。而是用以下拼接方式：**
+
+```
+PROMPT_COVER = BASE_STYLE + {LLM 生成的主题视觉描述} + ", wide banner composition with space for title text on the right side, 16:9 aspect ratio"
+
+PROMPT_INLINE = BASE_STYLE + {LLM 生成的核心概念视觉描述} + ", centered icon with cute character illustration, square composition, 1:1 aspect ratio"
+
+PROMPT_CARD = BASE_STYLE + {LLM 生成的主题视觉元素} + ", with prominent Chinese text reading '{card_title}', vertical card layout, large bold readable text overlay, 3:4 aspect ratio"
+```
+
+#### Prompt（发送给 Kimi K2.5，只让它生成中间变量部分）
+
+```
+Based on this video content, I need you to generate components for 3 image prompts.
 
 Video title: {title}
 One-line summary: {tl_dr}
-Key concepts: {从核心要点中提取 3-5 个关键词}
 
-All 3 prompts MUST start with this exact base style prefix:
-"cute kawaii-style digital illustration, warm beige/cream background, soft pastel colors, rounded cartoon elements, cheerful decorative details like confetti and banners, clean layout, friendly and professional, flat design with subtle shadows, "
+Generate exactly the following 4 items. Each should be 10-30 English words describing specific visual objects/scenes (NO abstract concepts, NO style words like "kawaii" or "pastel"):
 
-Then append topic-specific content for each:
+TOPIC_VISUAL: A visual metaphor or scene that represents the video's main topic. Use specific objects.
+Example: "a laptop showing rising graph charts surrounded by shopping bags and megaphone"
 
-PROMPT_COVER: [base style] + a visual metaphor that represents the video's main topic, showing relevant objects/scenes + "wide banner composition with space for title text on the right side, 16:9 aspect ratio"
+CONCEPT_VISUAL: A visual representation of the single most important method or concept discussed. Show a cute character doing something related.
+Example: "a cute character with magnifying glass examining three different advertisement cards"
 
-PROMPT_INLINE: [base style] + a visual representation of the single most important concept or method discussed in the video, with a cute character demonstrating or interacting with it + "centered composition, square format, 1:1 aspect ratio"
+CARD_VISUAL: Topic-related decorative elements that would frame text nicely.
+Example: "rocket ships, target icons, and coins scattered around a central text area"
 
-PROMPT_CARD: [base style] + topic-related visual elements arranged around prominent Chinese text that reads "{card_title}" + "vertical card layout, large bold readable Chinese text as the main focal point, decorative elements framing the text, 3:4 aspect ratio"
+CARD_TITLE: A catchy Chinese title of 6-10 characters that captures the video's core message. Punchy and shareable.
+Example: "三步写出爆款广告"
 
-For {card_title}: Generate a catchy Chinese title of 6-10 characters that captures the video's core message. This text will appear ON the image.
+Output EXACTLY in this format, nothing else:
+TOPIC_VISUAL: {text}
+CONCEPT_VISUAL: {text}
+CARD_VISUAL: {text}
+CARD_TITLE: {Chinese text}
+```
 
-Rules:
-- Keep prompts under 200 words each
-- Be specific about objects and scenes, avoid abstract descriptions
-- Do not mention any real people, brands, or logos
-- The card title Chinese text should be punchy and shareable
+#### 拼接最终 Prompt（在代码中完成，不交给 LLM）
 
-Output EXACTLY in this format (no other text before or after):
-PROMPT_COVER: {full prompt including base style}
-PROMPT_INLINE: {full prompt including base style}
-PROMPT_CARD: {full prompt including base style}
-CARD_TITLE: {6-10 Chinese characters}
+```python
+BASE_STYLE = "cute kawaii-style digital illustration, warm beige/cream background, soft pastel colors, rounded cartoon elements, cheerful decorative details like confetti and banners, clean layout, friendly and professional, flat design with subtle shadows, "
+
+PROMPT_COVER = BASE_STYLE + topic_visual + ", wide banner composition with space for title text on the right side, 16:9 aspect ratio"
+
+PROMPT_INLINE = BASE_STYLE + concept_visual + ", centered icon with cute character illustration, square composition, 1:1 aspect ratio"
+
+PROMPT_CARD = BASE_STYLE + card_visual + ", with prominent Chinese text reading '" + card_title + "', vertical card layout, large bold readable text overlay, 3:4 aspect ratio"
 ```
 
 ---
 
-### Step 3 完整输出（传递给后续步骤）
+### Step 3 完整输出
 
 ```yaml
 version_a:
   tl_dr: "一句话总结文本"
-  full_text: |
-    完整版本 A markdown 文本，包含所有 section：
-    一句话总结 / 核心要点 / 观点提取 / 金句引用 / 行动建议
+  full_text: "完整版本 A markdown（所有 section）"
 
 version_b:
-  full_text: |
-    完整版本 B 文章正文
-    包含 [IMAGE:cover] 和 [IMAGE:inline] 两个占位符
-    纯中文自然段落，无格式标记
+  full_text: "完整版本 B 文章（含 [IMAGE:cover] 和 [IMAGE:inline]）"
 
 image_prompts:
-  cover: "完整的封面图 prompt（含 base style）"
-  inline: "完整的配图 prompt（含 base style）"
-  card: "完整的卡片 prompt（含 base style）"
+  cover: "完整拼接后的封面图 prompt"
+  inline: "完整拼接后的配图 prompt"
+  card: "完整拼接后的卡片 prompt"
   card_title: "6-10 字中文卡片标题"
 
 metadata:
@@ -644,8 +719,32 @@ metadata:
   duration_minutes: 时长分钟数
   video_url: "YouTube 链接"
   thumbnail: "原始缩略图 URL"
-  published: "发布日期 ISO"
+  published: "发布日期"
 ```
+
+### ✅ Step 3 质量门禁
+
+**版本 A 检查：**
+- [ ] 一句话总结字数在 20-30 字之间
+- [ ] 核心要点数量 ≥ 3 条
+- [ ] 观点提取数量符合时长档位要求
+- [ ] 金句引用包含英文原文
+- [ ] 行动建议以动词开头
+
+**版本 B 检查：**
+- [ ] 字数在目标范围内（±20%）
+- [ ] 包含 `[IMAGE:cover]` 和 `[IMAGE:inline]` 两个占位符
+- [ ] 开头不是 "今天给大家分享" / "最近看了" / "大家好" 等禁止套路
+- [ ] 全文 emoji 数量 ≤ 3 个
+- [ ] 不包含编号列表（1. 2. 3. 或 - 开头的列表段落）
+- [ ] 至少有 3 处个人观点表达（如 "我觉得"、"说实话"、"坦白讲"）
+- [ ] 结尾是互动提问
+
+**图片 Prompt 检查：**
+- [ ] 3 个 prompt 都以 "cute kawaii-style digital illustration" 开头
+- [ ] CARD_TITLE 是 6-10 个中文字
+
+**如果版本 B 不通过质量门禁 → 用 Kimi K2.5 重新生成一次（最多重试 1 次），附上具体不合格项作为额外指令。**
 
 ---
 
@@ -657,17 +756,17 @@ Step 3 content-digest 完成后自动进入。
 ### 执行流程
 
 ```
-1. 接收 3 段图片 prompt（cover / inline / card）
+1. 接收 3 段已拼接好的图片 prompt（cover / inline / card）
 2. 向 Nano Banana Pro 提交 3 个异步生成请求
-3. 轮询每个请求的状态，直到全部完成或超时
+3. 用正确的 /api/async/detail 接口轮询状态
 4. 对每张成功的图片，上传到 ImgBB 获取永久 URL
-5. 用永久 URL 替换版本 B 中的 [IMAGE:cover] 和 [IMAGE:inline] 占位符
-6. 将 3 个 URL + 替换后的版本 B 传递给 Step 5
+5. 用永久 URL 替换版本 B 中的占位符
+6. 传递给 Step 5
 ```
 
 ### API 1: Nano Banana Pro — 提交异步生成
 
-对每张图片分别调用：
+**⚠️ 注意 Authorization header 的值是 API 密钥本身，不带 Bearer 前缀。**
 
 ```http
 POST https://api.wuyinkeji.com/api/async/image_nanoBanana_pro
@@ -685,24 +784,30 @@ prompt={image_prompt}&imageSize=1K&aspectRatio={ratio}
 | 文章配图 | image_prompts.inline | `1:1` | 文章中间插图 |
 | 图文卡片 | image_prompts.card | `3:4` | 小红书独立分享 |
 
-**响应：**
+**响应示例：**
 ```json
 {
   "code": 200,
+  "msg": "成功",
   "data": {
-    "id": "img_abc123"
-  }
+    "id": "image_4d39239e-776a-4cbd-a8eb-e2d9b4816829",
+    "count": 10
+  },
+  "exec_time": 0.290186,
+  "ip": "119.6.176.239"
 }
 ```
 
-记录每个请求的 `id`。
+记录每个请求的 `data.id`。
 
 ### API 2: Nano Banana Pro — 轮询状态
 
+**⚠️ 正确接口地址（之前用的 /api/img/drawDetail 是错的，会 404）：**
+
 ```http
-GET https://api.wuyinkeji.com/api/img/drawDetail?id={id}
+GET https://api.wuyinkeji.com/api/async/detail?id={id}
 Authorization: {{NANO_BANANA_API_KEY}}
-Content-Type: application/json;charset:utf-8;
+Content-Type: application/x-www-form-urlencoded;charset:utf-8;
 ```
 
 **轮询规则：**
@@ -712,22 +817,22 @@ Content-Type: application/json;charset:utf-8;
 
 **状态判断：**
 ```
-status=0 → 排队中，继续等待
-status=1 → 生成中，继续等待
-status=2 → ✅ 成功，提取 data.image_url
-status=3 → ❌ 失败，记录错误信息
+data.status = 0 → 初始化，继续等待
+data.status = 1 → 进行中，继续等待
+data.status = 2 → ✅ 成功，从 data 中提取图片 URL
+data.status = 3 → ❌ 失败，data.message 包含错误信息
 ```
 
-### API 3: ImgBB — 上传图床获取永久 URL
+**成功响应中提取图片 URL：** 查看 `data` 对象中的图片链接字段（通常为 `data.image_url` 或 `data.url` 或 `data.output`，以实际返回为准）。
 
-对每张成功生成的图片：
+### API 3: ImgBB — 上传图床获取永久 URL
 
 ```http
 POST https://api.imgbb.com/1/upload
 Content-Type: multipart/form-data
 
 key={{IMGBB_API_KEY}}
-image={Nano Banana 返回的 image_url}
+image={Nano Banana 返回的图片 URL}
 name={描述性文件名，如 cover_alex-hormozi_20260211}
 ```
 
@@ -752,25 +857,48 @@ name={描述性文件名，如 cover_alex-hormozi_20260211}
   [IMAGE:inline] → ![配图]({inline_imgbb_url})
 ```
 
-### 输出（传递给 Step 5 和 Step 6）
+### 输出
 
 ```yaml
 images:
-  cover_url: "https://i.ibb.co/xxx/cover.png"
-  inline_url: "https://i.ibb.co/xxx/inline.png"
-  card_url: "https://i.ibb.co/xxx/card.png"
+  cover_url: "https://i.ibb.co/xxx/cover.png"     # 或降级值
+  inline_url: "https://i.ibb.co/xxx/inline.png"    # 或降级值
+  card_url: "https://i.ibb.co/xxx/card.png"        # 或降级值
 
-version_b_with_images: |
-  版本 B 完整文本（[IMAGE:cover] 和 [IMAGE:inline] 已替换为实际图片 markdown）
+image_status:
+  cover: "success" | "fallback_thumbnail" | "failed"
+  inline: "success" | "fallback_thumbnail" | "failed"
+  card: "success" | "fallback_thumbnail" | "failed"
+
+version_b_with_images: "版本 B 完整文本（占位符已替换）"
 ```
+
+### 降级策略（按优先级）
+
+```
+图片生成成功 → 上传 ImgBB → 使用 ImgBB URL         ✅ 最佳
+ImgBB 上传失败 → 直接使用 Nano Banana 原始 URL       ⚠️ 可能过期
+图片生成失败 → 使用视频原始缩略图 URL                  ⚠️ 降级方案
+全部 3 张都失败 → 移除版本 B 中的占位符行              ❌ 最差情况
+```
+
+### ⚠️ 状态报告规则（必须准确）
+
+向用户报告时，必须如实反映每张图的实际状态：
+- 如果 3 张都成功："✅ 已生成 3 张配图并上传图床"
+- 如果部分降级："⚠️ 封面图和配图已生成，图文卡片生成失败，已使用视频缩略图替代"
+- 如果全部失败："❌ 图片生成全部失败，文章中未插入图片"
+
+**禁止说"已生成图片"但实际用的是占位图/缩略图。**
 
 ### 成本
 每张 ¥0.03，每篇 3 张 = **¥0.09/篇**
 
-### 错误处理
-- 单张图片生成失败 → 用视频原始缩略图 URL 替代该位置，继续流程
-- ImgBB 上传失败 → 直接使用 Nano Banana Pro 返回的原始 URL（可能过期，但不阻断流程）
-- 全部 3 张都失败 → 移除版本 B 中的占位符行（删除该行），使用缩略图作为封面，继续流程
+### ✅ Step 4 质量门禁
+- [ ] 至少 1 张图片成功生成（cover 优先）
+- [ ] 成功的图片已上传 ImgBB 获得永久 URL
+- [ ] 版本 B 中的占位符已被替换（或已移除）
+- [ ] image_status 准确反映每张图的实际状态
 
 ---
 
@@ -779,16 +907,30 @@ version_b_with_images: |
 ### 触发
 Step 4 图片生成完成后自动进入。
 
+### ⚠️ 分段写入策略（解决内容缩水问题）
+
+Notion API 单次写入有长度限制。当内容较长时，必须分段写入：
+
+```
+1. 先创建页面，写入属性（properties）+ 存档版内容（版本 A）
+2. 再用 append/update 追加二创文章（版本 B with images）
+3. 最后追加素材 URL 区域
+```
+
+**每段写入后，验证是否成功再继续下一段。**
+
 ### 执行流程
 
 ```
-1. 在 Notion「播客知识库 V3」创建新页面
-2. 写入页面属性（properties）
-3. 写入页面正文（body content）
-4. 更新「待处理队列」中该记录的状态 → ✅ 已完成
+1. 创建 Notion 页面，写入属性 + 存档版（版本 A）
+2. 验证页面创建成功
+3. 追加写入二创文章（版本 B with images）
+4. 验证追加成功
+5. 追加写入素材 URL
+6. 更新待处理队列状态 → ✅ 已完成
 ```
 
-### 写入页面属性
+### Step 5.1: 创建页面 + 写入属性 + 存档版
 
 ```
 parent: { data_source_id: "30083d24-986d-81d9-931d-000bef515098" }
@@ -804,40 +946,55 @@ properties:
   缩略图: "{images.card_url}"
   状态: "已消化"
   发布状态: "未发布"
+
+content (第一段):
+  ## 📋 存档版
+
+  {version_a.full_text 完整内容}
+
+  ---
 ```
 
-注意：`标签` (multi_select) 留空，由用户手动打标。
+### Step 5.2: 追加二创文章
 
-### 写入页面正文
-
-使用 Notion enhanced markdown 格式：
+使用 Notion update page 的 `insert_content_after` 命令，在存档版 `---` 分割线之后追加：
 
 ```markdown
-## 📋 存档版
-
-{version_a.full_text}
-
----
-
 ## ✍️ 二创文章
 
-{version_b_with_images}
+{version_b_with_images — 完整版本 B，图片已插入}
 
 ---
+```
 
+### Step 5.3: 追加素材区
+
+继续追加：
+
+```markdown
 ## 🖼️ 素材
 
 封面图（16:9）：{images.cover_url}
 文章配图（1:1）：{images.inline_url}
 图文卡片（3:4）：{images.card_url}
+
+图片状态：{image_status 的中文描述}
 ```
 
 ### 更新队列状态
 
-知识库页面创建成功后，更新「📥 播客待处理队列」中对应记录：
+知识库页面创建并写入完成后，更新「📥 播客待处理队列」中对应记录：
 ```
 状态 → "✅ 已完成"
 ```
+
+### ✅ Step 5 质量门禁
+- [ ] Notion 页面创建成功（返回了 page_id）
+- [ ] 所有属性字段已写入
+- [ ] 存档版内容写入成功
+- [ ] 二创文章追加成功
+- [ ] 素材 URL 追加成功
+- [ ] 队列状态已更新为 ✅ 已完成
 
 ---
 
@@ -868,16 +1025,16 @@ digest: "{version_a.tl_dr}"
 ### Markdown → 微信 HTML 转换规则
 
 ```
-段落文本     → <p style="margin:0 0 16px 0;line-height:1.8;color:#333;font-size:16px;">{text}</p>
+段落文本       → <p style="margin:0 0 16px 0;line-height:1.8;color:#333;font-size:16px;">{text}</p>
 图片 ![x](url) → <p style="text-align:center;margin:20px 0;"><img src="{url}" style="width:100%;border-radius:8px;" /></p>
-空行         → 忽略（已通过 <p> 的 margin 控制间距）
+空行           → 忽略（已通过 <p> 的 margin 控制间距）
 ```
 
 不使用 H1-H6 标签。不使用粗体/斜体标签。保持朴素排版。
 
 ### 转换示例
 
-版本 B 原文（占位符已替换）：
+版本 B 原文：
 ```
 ![封面图](https://i.ibb.co/xxx/cover.png)
 
@@ -912,20 +1069,41 @@ digest: "{version_a.tl_dr}"
 
 ---
 
+## 每篇处理完成后的汇总报告模板
+
+每处理完一篇视频，向用户发送以下格式的报告（必须如实填写每项状态）：
+
+```
+📝 处理报告：{video_title}
+
+🎬 字幕提取：✅ 成功（{duration_minutes} 分钟，{transcript_char_count} 字符）
+📝 内容消化：✅ 版本 A（{viewpoint_count} 条观点）+ 版本 B（{word_count} 字）
+🖼️ 图片生成：
+  - 封面图：{✅ 成功 / ⚠️ 使用缩略图替代 / ❌ 失败}
+  - 文章配图：{✅ 成功 / ⚠️ 使用缩略图替代 / ❌ 失败}
+  - 图文卡片：{✅ 成功 / ⚠️ 使用缩略图替代 / ❌ 失败}
+📓 Notion：✅ 已写入知识库（{notion_page_url}）
+📱 微信草稿：✅ 已存入草稿箱
+
+总耗时：{elapsed_time}
+```
+
+---
+
 ## 成本估算
 
 | 项目 | 单价 | 说明 |
 |------|------|------|
 | 频道监控 | 免费 | TranscriptAPI channel/latest + channel/resolve |
 | 字幕提取 | 1 credit/视频 | TranscriptAPI transcript |
-| 内容消化 | LLM token | Claude/GPT API |
+| 内容消化 | LLM token | Kimi K2.5 |
 | 图片生成 | ¥0.09/篇 | 3 张 × ¥0.03 |
 | 图床 | 免费 | ImgBB |
 | Notion | 免费 | Notion API |
 | 微信草稿 | 免费 | 微信公众号 API |
 
-**每篇总成本 ≈ 1 credit + LLM token + ¥0.09**
-**每日成本（2 篇）≈ 2 credits + LLM tokens + ¥0.18**
+**每篇总成本 ≈ 1 credit + Kimi token + ¥0.09**
+**每日成本（2 篇）≈ 2 credits + Kimi tokens + ¥0.18**
 
 ---
 
@@ -939,35 +1117,43 @@ digest: "{version_a.tl_dr}"
 
 08:01  queue-manager 启动
        → 取优先级最高的 2 条
-       → 开始第 1 条：Alex Hormozi "How I Made $100M"
+
+--- 第 1 条：Alex Hormozi "How I Made $100M" ---
 
 08:01  Step 2 字幕提取
-       → TranscriptAPI → 获得 45 分钟字幕文本
+       → 调用 TranscriptAPI（不是其他 API！）
+       → 获得 45 分钟完整字幕文本（32,000 字符）
        → 队列状态 → 📋 已提取字幕
+       → ✅ 质量门禁：字幕 > 500 字符 ✓
 
-08:02  Step 3 内容消化
+08:02  Step 3 内容消化（使用 Kimi K2.5，不是其他模型！）
        → 版本 A：15 条观点 + 3 条金句 + 3 条行动建议
-       → 版本 B：1300 字二创文章（含 2 个图片占位符）
-       → 3 段图片 prompt
+       → 版本 B：1300 字二创文章（含占位符）
+       → 图片 prompt：3 段（base style 拼接，不是 LLM 自由生成！）
        → 队列状态 → ✍️ 处理中
+       → ✅ 质量门禁：版本 B 无禁止套路开头 ✓，emoji ≤ 3 ✓
 
 08:03  Step 4 图片生成
-       → 提交 3 张图生成请求（并行）
-       → 轮询 ~30-60 秒等待完成
-       → 上传 ImgBB → 3 个永久 URL
+       → POST /api/async/image_nanoBanana_pro ×3
+       → GET /api/async/detail 轮询（不是 /api/img/drawDetail！）
+       → 3 张全部成功 → 上传 ImgBB
        → 替换版本 B 占位符
+       → 状态报告："✅ 已生成 3 张配图"（不是说成功但用的占位图！）
 
-08:04  Step 5 Notion 存储
-       → 创建知识库页面（属性 + 正文）
+08:04  Step 5 Notion 存储（分段写入）
+       → 第 1 段：创建页面 + 属性 + 存档版 ✓
+       → 第 2 段：追加二创文章 ✓
+       → 第 3 段：追加素材 URL ✓
        → 队列状态 → ✅ 已完成
 
 08:04  Step 6 微信草稿
        → Markdown → HTML → 存入草稿箱
        → 发布状态 → 微信已发
 
-08:05  开始第 2 条：Fraser Cottrell "Meta Ads Strategy 2026"
-       → 重复 Step 2-6...
+--- 第 2 条开始 ---
+
+08:05  Step 2-6 重复...
 
 08:10  全部完成
-       → 通知："已处理 2 篇，队列剩余 5 条"
+       → 汇总通知："已处理 2 篇，队列剩余 5 条"
 ```
