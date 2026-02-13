@@ -1,0 +1,38 @@
+# OpenClaw Workspace - 敏感文件保护
+# 这些文件包含个人身份信息、记忆和配置，不应该提交到GitHub
+
+# 身份和灵魂文件
+SOUL.md
+IDENTITY.md
+USER.md
+
+# 记忆文件
+MEMORY.md
+memory/
+living-files/
+
+# 代理配置
+AGENTS.md
+BOOTSTRAP.md
+HEARTBEAT.md
+SELF_REVIEW.md
+TOOLS.md
+
+# 敏感凭据
+.credentials
+.env
+.env.local
+.env.*.local
+
+# 临时文件和缓存
+node_modules/
+.clawhub/
+*.log
+.DS_Store
+
+# 个人笔记和报告（可选）
+memory-architecture.md
+notion_content.md
+notion-workspace-brief.md
+pipeline_report.md
+test_report.md
