@@ -10,3 +10,4 @@
 
 ## Playbooks
 - OpenClaw advanced usage (fallbacks/auth/memory/nodes/multi-agent): `KB/openclaw-advanced-usage-playbook.md`
+- OpenClaw x Cloud Code webhooks (zero polling callbacks): `KB/openclaw-cloudcode-hooks-zero-polling.md`
