@@ -67,6 +67,18 @@ Create a new skill delta entry (manual edit):
 - edit the target skill's `SKILL.md`
 - add/update a "Known issues" or "Troubleshooting" section
 
+## Post-run checklist (mandatory)
+
+After every non-trivial skill execution, ask yourself:
+
+- [ ] Did I encounter any new pitfall or error? → Write it down (memory + skill)
+- [ ] Did I find a better way to do something? → Update the skill's "known-good steps"
+- [ ] Did the skill doc change? → Commit + push to GitHub
+- [ ] Did I update memory? → Both daily file AND relevant skill doc
+
+Rule: skill updates and memory updates are ALWAYS dual-written.
+Rule: every skill update MUST be pushed to GitHub.
+
 ## Safety rules
 
 - Never paste secrets into chat or into workspace files.
