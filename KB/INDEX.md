@@ -8,6 +8,8 @@
 ## Packets
 - Folder: `KB/packets/`
 - Latest (optional): `KB/packets/latest.md`
+- 2026-02-27 OpenClaw advanced usage: `KB/packets/2026-02-27-openclaw-advanced-usage.md`
+- 2026-02-27 Cloud Code hooks zero polling: `KB/packets/2026-02-27-cloudcode-hooks-zero-polling.md`
 
 ## Playbooks
 - OpenClaw advanced usage (fallbacks/auth/memory/nodes/multi-agent): `KB/openclaw-advanced-usage-playbook.md`

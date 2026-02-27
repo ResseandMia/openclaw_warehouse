@@ -1,6 +1,8 @@
-# Learning Packet Template (V3)
+# Learning Packet Template (V4)
 
 Purpose: turn a source (video/article/thread) into a reusable packet that another agent can execute.
+
+Note: you only propose actions. Execution/assignment is decided by Mimi.
 
 ## 0) Metadata
 - Topic:
@@ -22,7 +24,8 @@ Purpose: turn a source (video/article/thread) into a reusable packet that anothe
 At least 1 Quick Win that takes <= 10 minutes.
 
 ### Quick Win (<= 10m)
-- Owner:
+- Suggested owner:
+- Need Mimi decision (yes/no + reason):
 - Steps:
 - Done (definition of done):
 - Verification:
