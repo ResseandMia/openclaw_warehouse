@@ -30,6 +30,9 @@ node_modules/
 *.log
 .DS_Store
 
+# hooks / relay
+.openclaw_hooks/
+
 # 个人笔记和报告（可选）
 memory-architecture.md
 notion_content.md

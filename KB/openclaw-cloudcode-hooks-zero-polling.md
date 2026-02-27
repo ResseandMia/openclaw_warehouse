@@ -84,7 +84,7 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
     "wakeMode": "now",
     "deliver": true,
     "channel": "discord",
-    "to": "channel:1476965845560463482"
+    "to": "1476965845560463482"
   }'
 ```
 
@@ -96,6 +96,8 @@ Expected:
 In Cloud Code, create a hook script that:
 1) loads the run output (`result.json` or `summary.md`)
 2) calls OpenClaw webhook once
+
+Repo reference implementation: `scripts/cloudcode-openclaw-hooks-agent.mjs` (idempotent + Discord delivery).
 
 Example (POSIX shell; keep payload small):
 
@@ -133,7 +135,7 @@ cat > "$PAYLOAD_FILE" <<EOF
   "wakeMode": "now",
   "deliver": true,
   "channel": "discord",
-  "to": "channel:1476965845560463482"
+  "to": "1476965845560463482"
 }
 EOF
 

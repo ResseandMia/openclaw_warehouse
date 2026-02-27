@@ -89,7 +89,7 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
     "wakeMode": "now",
     "deliver": true,
     "channel": "discord",
-    "to": "channel:<DISCORD_CHANNEL_ID>"
+    "to": "<DISCORD_CHANNEL_ID>"
   }'
 ```
 
@@ -134,7 +134,7 @@ cat > payload.json <<EOF
   "wakeMode": "now",
   "deliver": true,
   "channel": "discord",
-  "to": "channel:$DISCORD_CHANNEL_ID"
+  "to": "$DISCORD_CHANNEL_ID"
 }
 EOF
 
