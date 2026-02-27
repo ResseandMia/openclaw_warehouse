@@ -111,3 +111,5 @@ OpenClaw 故障转移分两层：
 3. 记忆：写 `memory/YYYY-MM-DD.md` -> `memory_search` 命中
 4. nodes：`openclaw nodes pending/approve` -> `openclaw nodes status` connected
 5. 多 agent：为 coder/tester/docs/reviewer 明确权限边界（exec/write/browser）
+
+补充（低 token 调用 Cloud Code）：见 `KB/openclaw-cloudcode-hooks-zero-polling.md`

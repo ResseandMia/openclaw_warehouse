@@ -3,6 +3,7 @@
 ## Templates
 - Learning Packet: `KB/LEARNING_PACKET_TEMPLATE.md`
 - Delivery Hall: `KB/DELIVERY_HALL_TEMPLATE.md`
+- QA request (for `#qa-queue`): `KB/QA_REQUEST_TEMPLATE.md`
 
 ## Packets
 - Folder: `KB/packets/`

@@ -1,23 +1,42 @@
-# Delivery Hall Template
+# Delivery Hall Template (V3)
 
-> Must include: one-line conclusion / 3 key points / actions in 3 tiers / KB path / verification / rollback.
+Must include:
+- One-line conclusion
+- Acceptance level (A/B/C)
+- 3 key points
+- Action Pack (3 tiers; each tier MUST have Owner + Done)
+- Verification + Rollback
+- KB path
 
 ## One-line conclusion
+
+## Acceptance level (A/B/C)
+- Level:
+- Why:
 
 ## 3 key points
 1.
 2.
 3.
 
-## Actions (3 tiers)
-### Tier 1 (10 minutes)
-- 
+## Action Pack (3 tiers)
+### Tier 1 (<= 10 minutes)
+- Owner:
+- Steps:
+- Done:
+- Rollback:
 
-### Tier 2 (1 hour)
-- 
+### Tier 2 (<= 1 hour)
+- Owner:
+- Steps:
+- Done:
+- Rollback:
 
-### Tier 3 (Half-day / project)
-- 
+### Tier 3 (half-day / project)
+- Owner:
+- Steps:
+- Done:
+- Rollback:
 
 ## KB path
 - `KB/<name>.md`

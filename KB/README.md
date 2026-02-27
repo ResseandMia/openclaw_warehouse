@@ -10,6 +10,7 @@ Goals:
 
 How to contribute:
 1) Write a Learning Packet using `KB/LEARNING_PACKET_TEMPLATE.md`.
-2) Post a short delivery summary to `#delivery-hall` using `KB/DELIVERY_HALL_TEMPLATE.md` and @Mimi.
-3) If it changes how we operate, update `RULES.md` / a playbook.
-4) Keep it concrete: steps, commands, config snippets, do/don't.
+2) If the work is acceptance level A/B: request validation in `#qa-queue` using `KB/QA_REQUEST_TEMPLATE.md`.
+3) Post the final delivery to `#delivery-hall` using `KB/DELIVERY_HALL_TEMPLATE.md` and @Mimi.
+4) If it changes how we operate, update `RULES.md` / a playbook.
+5) Keep it concrete: steps, commands, config snippets, do/don't.
