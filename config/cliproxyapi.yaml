@@ -1,0 +1,39 @@
+# CLI Proxy API Configuration
+# 反重力 (Antigravity) + Claude Opus 4.6 接入配置
+
+server:
+  host: 127.0.0.1
+  port: 8080
+  
+providers:
+  # 反重力 - Antigravity
+  antigravity:
+    enabled: true
+    # 需要通过 OAuth 登录获取凭证
+    # 运行: ./bin/cli-proxy-api -antigravity-login
+    
+  # Claude Code (通过反重力代理)
+  claude:
+    enabled: true
+    # 需要通过 OAuth 登录
+    # 运行: ./bin/cli-proxy-api -claude-login
+
+# 模型映射
+models:
+  # 反重力提供的 Claude Opus 4.6
+  claude-opus-4-6:
+    provider: antigravity
+    model_id: claude-opus-4-6
+    
+  # Gemini 2.5 Pro (反重力)
+  gemini-2-5-pro:
+    provider: antigravity
+    model_id: gemini-2.5-pro
+
+# 负载均衡与回退
+load_balancing:
+  mode: round-robin
+  
+fallback:
+  enabled: true
+  # 当主模型失败时自动切换
